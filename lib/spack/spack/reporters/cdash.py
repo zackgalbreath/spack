@@ -93,11 +93,18 @@ class CDash(Reporter):
         tty.warn("!!! parsing build output !!!")
         for spec in report_data['specs']:
             for package in spec['packages']:
-                tty.warn("!!! parsing build output for {0} !!!".format(package['name']))
                 if 'stdout' in package:
+                    tty.warn("!!! parsing build output for {0} !!!".format(package['name']))
+                    lines = package['stdout'].splitlines()
+                    num_lines = len(lines)
+                    tty.warn("!!! it has {0} lines of output !!!".format(num_lines))
                     current_phase = ''
-                    for line in package['stdout'].splitlines():
-                        match = phase_regexp.search(line)
+                    for i, line in enumerate(lines):
+                        if i % 100 == 0:
+                            tty.warn("!!! {0} / {1} complete !!!".format(i, num_lines))
+                        match = None
+                        if line.find("Executing phase: '") != -1:
+                            match = phase_regexp.search(line)
                         if match:
                             current_phase = match.group(1)
                             if current_phase not in map_phases_to_cdash:
