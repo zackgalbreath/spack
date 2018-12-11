@@ -165,6 +165,7 @@ def install_spec(cli_args, kwargs, spec):
 
 
 def install(parser, args, **kwargs):
+    tty.warn("!!! spack install gets called !!!")
     if not args.package and not args.specfiles:
         tty.die("install requires at least one package argument or yaml file")
 

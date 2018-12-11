@@ -22,6 +22,7 @@ import spack.package
 from spack.reporter import Reporter
 from spack.util.crypto import checksum
 from spack.util.log_parse import parse_log_events
+import llnl.util.tty as tty
 
 __all__ = ['CDash']
 
@@ -53,6 +54,7 @@ class CDash(Reporter):
     """
 
     def __init__(self, args):
+        tty.warn("!!! CDash reporter constructor gets called !!!")
         Reporter.__init__(self, args)
         self.template_dir = os.path.join('reports', 'cdash')
         self.cdash_upload_url = args.cdash_upload_url
@@ -72,6 +74,7 @@ class CDash(Reporter):
                                         time.localtime(self.starttime))
 
     def build_report(self, filename, report_data):
+        tty.warn("!!! build_report gets called !!!")
         self.initialize_report(filename, report_data)
 
         for phase in cdash_phases:
@@ -87,8 +90,10 @@ class CDash(Reporter):
         # Parse output phase-by-phase.
         phase_regexp = re.compile(r"Executing phase: '(.*)'")
         cdash_phase = ''
+        tty.warn("!!! parsing build output !!!")
         for spec in report_data['specs']:
             for package in spec['packages']:
+                tty.warn("!!! parsing build output for {0} !!!".format(package['name']))
                 if 'stdout' in package:
                     current_phase = ''
                     for line in package['stdout'].splitlines():
@@ -110,6 +115,7 @@ class CDash(Reporter):
                                 xml.sax.saxutils.escape(line) + "\n"
 
         for phase in phases_encountered:
+            tty.warn("!!! generating a report for the {0} phase !!!".format(phase))
             errors, warnings = parse_log_events(
                 report_data[phase]['log'].splitlines())
             nerrors = len(errors)
@@ -148,6 +154,7 @@ class CDash(Reporter):
             report_name = phase.capitalize() + ".xml"
             phase_report = os.path.join(filename, report_name)
 
+            tty.warn("!!! writing {0} !!!".format(phase_report))
             with codecs.open(phase_report, 'w', 'utf-8') as f:
                 env = spack.tengine.make_environment()
                 site_template = os.path.join(self.template_dir, 'Site.xml')
@@ -157,6 +164,7 @@ class CDash(Reporter):
                 phase_template = os.path.join(self.template_dir, report_name)
                 t = env.get_template(phase_template)
                 f.write(t.render(report_data))
+            tty.warn("!!! uploading {0} !!!".format(phase_report))
             self.upload(phase_report)
 
     def concretization_report(self, filename, msg):
