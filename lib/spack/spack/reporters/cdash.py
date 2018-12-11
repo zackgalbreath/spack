@@ -91,11 +91,22 @@ class CDash(Reporter):
         phase_regexp = re.compile(r"Executing phase: '(.*)'")
         cdash_phase = ''
         tty.warn("!!! parsing build output !!!")
+
+        begin_time = 0.0
+        splitlines_time = 0.0
+        find_time = 0.0
+        regexp_time = 0.0
+        escape_time = 0.0
+        append_time = 0.0
+
         for spec in report_data['specs']:
             for package in spec['packages']:
                 if 'stdout' in package:
                     tty.warn("!!! parsing build output for {0} !!!".format(package['name']))
+                    before = time.clock()
                     lines = package['stdout'].splitlines()
+                    after = time.clock()
+                    splitlines_time += (after - before)
                     num_lines = len(lines)
                     tty.warn("!!! it has {0} lines of output !!!".format(num_lines))
                     current_phase = ''
@@ -103,8 +114,15 @@ class CDash(Reporter):
                         if i % 100 == 0:
                             tty.warn("!!! {0} / {1} complete !!!".format(i, num_lines))
                         match = None
-                        if line.find("Executing phase: '") != -1:
+                        before = time.clock()
+                        phase_pos = line.find("Executing phase: '")
+                        after = time.clock()
+                        find_time += (after - before)
+                        if phase_pos != -1:
+                            before = time.clock()
                             match = phase_regexp.search(line)
+                            after = time.clock()
+                            regexp_time += (after - before)
                         if match:
                             current_phase = match.group(1)
                             if current_phase not in map_phases_to_cdash:
@@ -118,8 +136,16 @@ class CDash(Reporter):
                                 text_type("{0} output for {1}:\n".format(
                                     cdash_phase, package['name']))
                         elif cdash_phase:
-                            report_data[cdash_phase]['log'] += \
-                                xml.sax.saxutils.escape(line) + "\n"
+                            before = time.clock()
+                            escaped_line = xml.sax.saxutils.escape(line) + "\n"
+                            after = time.clock()
+                            escape_time += (after - before)
+
+                            before = time.clock()
+                            report_data[cdash_phase]['log'] += escaped_line
+                            after = time.clock()
+                            append_time += (after - before)
+                tty.warn("!!! finished {0}. splitlines: {1}, find: {2}, regexp: {3}, escape: {4}, append: {5}, running total: {6}".format(package['name'], splitlines_time, find_time, regexp_time, escape_time, append_time, time.clock() - begin_time))
 
         for phase in phases_encountered:
             tty.warn("!!! generating a report for the {0} phase !!!".format(phase))
