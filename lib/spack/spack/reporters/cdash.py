@@ -5,6 +5,7 @@
 
 
 import codecs
+import cStringIO
 import hashlib
 import os.path
 import platform
@@ -84,7 +85,7 @@ class CDash(Reporter):
 
         for phase in cdash_phases:
             report_data[phase] = {}
-            report_data[phase]['log'] = ""
+            report_data[phase]['log'] = cStringIO.StringIO()
             report_data[phase]['status'] = 0
             report_data[phase]['endtime'] = self.endtime
 
@@ -103,7 +104,9 @@ class CDash(Reporter):
                     current_phase = ''
                     cdash_phase = ''
                     for line in package['stdout'].splitlines():
-                        match = phase_regexp.search(line)
+                        match = None
+                        if line.find("Executing phase: '") != -1:
+                            match = phase_regexp.search(line)
                         if match:
                             current_phase = match.group(1)
                             if current_phase not in map_phases_to_cdash:
@@ -113,12 +116,12 @@ class CDash(Reporter):
                                 map_phases_to_cdash[current_phase]
                             if cdash_phase not in phases_encountered:
                                 phases_encountered.append(cdash_phase)
-                            report_data[cdash_phase]['log'] += \
+                            report_data[cdash_phase]['log'].write(
                                 text_type("{0} output for {1}:\n".format(
-                                    cdash_phase, package['name']))
+                                    cdash_phase, package['name'])))
                         elif cdash_phase:
-                            report_data[cdash_phase]['log'] += \
-                                xml.sax.saxutils.escape(line) + "\n"
+                            report_data[cdash_phase]['log'].write(
+                                xml.sax.saxutils.escape(line) + "\n")
 
         phases_encountered.append('update')
 
@@ -133,7 +136,7 @@ class CDash(Reporter):
         for phase in phases_encountered:
             report_data[phase]['starttime'] = self.starttime
             errors, warnings = parse_log_events(
-                report_data[phase]['log'].splitlines())
+                report_data[phase]['log'].getvalue().splitlines())
             nerrors = len(errors)
 
             if phase == 'configure' and nerrors > 0:
