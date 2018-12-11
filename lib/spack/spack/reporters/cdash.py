@@ -5,6 +5,7 @@
 
 
 import codecs
+import cStringIO
 import hashlib
 import os.path
 import platform
@@ -79,7 +80,7 @@ class CDash(Reporter):
 
         for phase in cdash_phases:
             report_data[phase] = {}
-            report_data[phase]['log'] = ""
+            report_data[phase]['log'] = cStringIO.StringIO()
             report_data[phase]['status'] = 0
             report_data[phase]['starttime'] = self.starttime
             report_data[phase]['endtime'] = self.starttime
@@ -92,7 +93,7 @@ class CDash(Reporter):
         cdash_phase = ''
         tty.warn("!!! parsing build output !!!")
 
-        begin_time = 0.0
+        begin_time = time.clock()
         splitlines_time = 0.0
         find_time = 0.0
         regexp_time = 0.0
@@ -132,9 +133,9 @@ class CDash(Reporter):
                                 map_phases_to_cdash[current_phase]
                             if cdash_phase not in phases_encountered:
                                 phases_encountered.append(cdash_phase)
-                            report_data[cdash_phase]['log'] += \
+                            report_data[cdash_phase]['log'].write(
                                 text_type("{0} output for {1}:\n".format(
-                                    cdash_phase, package['name']))
+                                    cdash_phase, package['name'])))
                         elif cdash_phase:
                             before = time.clock()
                             escaped_line = xml.sax.saxutils.escape(line) + "\n"
@@ -142,7 +143,7 @@ class CDash(Reporter):
                             escape_time += (after - before)
 
                             before = time.clock()
-                            report_data[cdash_phase]['log'] += escaped_line
+                            report_data[cdash_phase]['log'].write(escaped_line)
                             after = time.clock()
                             append_time += (after - before)
                 tty.warn("!!! finished {0}. splitlines: {1}, find: {2}, regexp: {3}, escape: {4}, append: {5}, running total: {6}".format(package['name'], splitlines_time, find_time, regexp_time, escape_time, append_time, time.clock() - begin_time))
@@ -150,7 +151,7 @@ class CDash(Reporter):
         for phase in phases_encountered:
             tty.warn("!!! generating a report for the {0} phase !!!".format(phase))
             errors, warnings = parse_log_events(
-                report_data[phase]['log'].splitlines())
+                report_data[phase]['log'].getvalue().splitlines())
             nerrors = len(errors)
 
             if phase == 'configure' and nerrors > 0:
