@@ -80,7 +80,7 @@ class CDash(Reporter):
 
         for phase in cdash_phases:
             report_data[phase] = {}
-            report_data[phase]['log'] = cStringIO.StringIO()
+            report_data[phase]['loglines'] = []
             report_data[phase]['status'] = 0
             report_data[phase]['starttime'] = self.starttime
             report_data[phase]['endtime'] = self.starttime
@@ -133,25 +133,23 @@ class CDash(Reporter):
                                 map_phases_to_cdash[current_phase]
                             if cdash_phase not in phases_encountered:
                                 phases_encountered.append(cdash_phase)
-                            report_data[cdash_phase]['log'].write(
-                                text_type("{0} output for {1}:\n".format(
+                            report_data[cdash_phase]['loglines'].append(
+                                text_type("{0} output for {1}:".format(
                                     cdash_phase, package['name'])))
                         elif cdash_phase:
                             before = time.clock()
-                            escaped_line = xml.sax.saxutils.escape(line) + "\n"
-                            after = time.clock()
-                            escape_time += (after - before)
-
-                            before = time.clock()
-                            report_data[cdash_phase]['log'].write(escaped_line)
+                            report_data[cdash_phase]['loglines'].append(
+                                xml.sax.saxutils.escape(line))
                             after = time.clock()
                             append_time += (after - before)
                 tty.warn("!!! finished {0}. splitlines: {1}, find: {2}, regexp: {3}, escape: {4}, append: {5}, running total: {6}".format(package['name'], splitlines_time, find_time, regexp_time, escape_time, append_time, time.clock() - begin_time))
 
+        phases_encountered.append('update')
         for phase in phases_encountered:
-            tty.warn("!!! generating a report for the {0} phase !!!".format(phase))
-            errors, warnings = parse_log_events(
-                report_data[phase]['log'].getvalue().splitlines())
+            report_data[phase]['starttime'] = self.starttime
+            report_data[phase]['log'] = \
+                '\n'.join(report_data[phase]['loglines'])
+            errors, warnings = parse_log_events(report_data[phase]['loglines'])
             nerrors = len(errors)
 
             if phase == 'configure' and nerrors > 0:
