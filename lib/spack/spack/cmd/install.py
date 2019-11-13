@@ -167,6 +167,8 @@ def add_cdash_args(subparser, add_help):
 Defaults to spec of the package to install."""
         cdash_help['site'] = """The site name that will be reported to CDash.
 Defaults to current system hostname."""
+        cdash_help['authtoken'] = """Path to file containing an authentication
+token to present to CDash"""
         cdash_help['track'] = """Results will be reported to this group on CDash.
 Defaults to Experimental."""
         cdash_help['buildstamp'] = """Instead of letting the CDash reporter prepare the
@@ -177,6 +179,7 @@ the build yourself.  Format: %%Y%%m%%d-%%H%%M-[cdash-track]"""
         cdash_help['upload-url'] = argparse.SUPPRESS
         cdash_help['build'] = argparse.SUPPRESS
         cdash_help['site'] = argparse.SUPPRESS
+        cdash_help['authtoken'] = argparse.SUPPRESS
         cdash_help['track'] = argparse.SUPPRESS
         cdash_help['buildstamp'] = argparse.SUPPRESS
 
@@ -194,6 +197,11 @@ the build yourself.  Format: %%Y%%m%%d-%%H%%M-[cdash-track]"""
         '--cdash-site',
         default=None,
         help=cdash_help['site']
+    )
+    subparser.add_argument(
+        '--cdash-authtoken',
+        default=None,
+        help=cdash_help['authtoken']
     )
 
     cdash_subgroup = subparser.add_mutually_exclusive_group()
