@@ -17,6 +17,7 @@ from six.moves.urllib.request import build_opener, HTTPHandler, Request
 from six.moves.urllib.parse import urlencode
 
 from llnl.util.filesystem import working_dir
+import llnl.util.tty as tty
 from ordereddict_backport import OrderedDict
 import spack.build_environment
 import spack.fetch_strategy
@@ -58,12 +59,20 @@ class CDash(Reporter):
 
     def __init__(self, args):
         Reporter.__init__(self, args)
+        tty.set_verbose(args.verbose)
         self.template_dir = os.path.join('reports', 'cdash')
         self.cdash_upload_url = args.cdash_upload_url
 
         if self.cdash_upload_url:
             self.buildid_regexp = re.compile("<buildId>([0-9]+)</buildId>")
         self.phase_regexp = re.compile(r"Executing phase: '(.*)'")
+
+        self.authtoken = None
+        if args.cdash_authtoken:
+            tty.verbose("Using CDash auth token from {0}"
+                      .format(args.cdash_authtoken))
+            with open(args.cdash_authtoken, 'r') as f:
+                self.authtoken = f.read().replace('\n', '')
 
         if args.package:
             packages = args.package
@@ -297,12 +306,16 @@ class CDash(Reporter):
             request = Request(url, data=f)
             request.add_header('Content-Type', 'text/xml')
             request.add_header('Content-Length', os.path.getsize(filename))
+            if self.authtoken:
+                request.add_header('Authorization',
+                                   'Bearer {0}'.format(self.authtoken))
             # By default, urllib2 only support GET and POST.
             # CDash needs expects this file to be uploaded via PUT.
             request.get_method = lambda: 'PUT'
             response = opener.open(request)
             if self.current_package_name not in self.buildIds:
-                match = self.buildid_regexp.search(response.read())
+                match = self.buildid_regexp.search(
+                    response.read().decode('utf-8'))
                 if match:
                     buildid = match.group(1)
                     self.buildIds[self.current_package_name] = buildid
