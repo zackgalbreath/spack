@@ -234,7 +234,8 @@ class CDash(Reporter):
             # from the binary cache.
             spec['packages'] = [
                 x for x in spec['packages']
-                if not x['installed_from_binary_cache']
+                if not 'installed_from_binary_cache' in x or
+                   not x['installed_from_binary_cache']
             ]
             for package in spec['packages']:
                 if 'stdout' in package:
