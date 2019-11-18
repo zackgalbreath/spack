@@ -5,19 +5,29 @@
 
 from spack import *
 import sys
+import numbers
+
+
+def is_positive_real(x):
+    """Any positive real value"""
+    try:
+        return isinstance(float(x), numbers.Real) and float(x) > 0 \
+                and not isinstance(x, bool)
+    except ValueError:
+        return False
 
 
 class NaluWind(CMakePackage):
     """Nalu-Wind: Wind energy focused variant of Nalu."""
 
     homepage = "https://github.com/exawind/nalu-wind"
-    git      = "https://github.com/exawind/nalu-wind.git"
+    git      = "https://github.com/psakievich/nalu-wind.git"
 
     maintainers = ['jrood-nrel']
 
     tags = ['ecp', 'ecp-apps']
 
-    version('master', branch='master')
+    version('master', branch='ctest', submodules=True)
 
     # Options
     variant('shared', default=(sys.platform != 'darwin'),
@@ -35,6 +45,12 @@ class NaluWind(CMakePackage):
             description='Compile with Catalyst support')
     variant('fftw', default=False,
             description='Compile with FFTW support')
+    variant(
+        'testtol',
+        default=1.0e-12,
+        description='Defines the test-tolerance when running tests.',
+        values=is_positive_real
+    )
 
     # Required dependencies
     depends_on('mpi')
@@ -117,4 +133,13 @@ class NaluWind(CMakePackage):
         if 'darwin' in spec.architecture:
             options.append('-DCMAKE_MACOSX_RPATH:BOOL=ON')
 
+        if self.run_tests:
+            options.append('-DENABLE_TESTS:BOOL=ON')
+            options.append('-DTEST_TOLERANCE=%f' %
+            float(self.spec.variants['testtol'].value))
+
+        else:
+            options.append('-DENABLE_TESTS:BOOL=OFF')
+
         return options
+
