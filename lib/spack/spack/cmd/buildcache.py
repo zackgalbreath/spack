@@ -868,7 +868,7 @@ def update_index(
     url = mirror.push_url
 
     with tempfile.TemporaryDirectory(dir=spack.stage.get_stage_root()) as tmpdir:
-        spack.binary_distribution._url_generate_package_index(url, tmpdir, timer=timer)
+        spack.binary_distribution._url_update_index(MirrorMetadata(url), tmpdir, timer=timer)
 
     if update_keys:
         mirror_update_keys(mirror)
@@ -959,20 +959,9 @@ def update_view(
     filter_fn = lambda x: x in hashes
 
     with tempfile.TemporaryDirectory(dir=spack.stage.get_stage_root()) as tmpdir:
-        # Initialize a database
-        db = spack.binary_distribution.BuildCacheDatabase(tmpdir)
-        db._write()
-
-        if update_mode == ViewUpdateMode.APPEND:
-            # Load the current state of the view index from the cache into the database
-            cache_index = BINARY_INDEX._local_index_cache.get(str(mirror_metadata))
-            if cache_index:
-                cache_key = cache_index["index_path"]
-                with BINARY_INDEX._index_file_cache.read_transaction(cache_key) as f:
-                    if f is not None:
-                        db._read_from_stream(f)
-
-        spack.binary_distribution._url_generate_package_index(url, tmpdir, db, name, filter_fn)
+        spack.binary_distribution._url_update_index(
+            mirror_metadata, tmpdir, update_mode == ViewUpdateMode.APPEND, filter_fn
+        )
 
     if update_keys:
         mirror_update_keys(mirror)

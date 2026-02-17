@@ -557,6 +557,7 @@ class URLBuildcacheEntry:
         tmpdir: str,
         component_type: BuildcacheComponent = BuildcacheComponent.SPEC,
         signing_key: Optional[str] = None,
+        **kwargs,
     ) -> None:
         """Given a BuildcacheManifest, push it to the mirror using the given manifest
         name.  The component_type is used to indicate what type of thing the manifest
@@ -581,7 +582,7 @@ class URLBuildcacheEntry:
             mirror_url, *cls.get_relative_path_components(component_type), manifest_file_name
         )
 
-        web_util.push_to_url(manifest_path, manifest_destination_url, keep_original=False)
+        web_util.push_to_url(manifest_path, manifest_destination_url, keep_original=False, extra_args=kwargs)
 
     @classmethod
     def push_local_file_as_blob(
@@ -591,6 +592,7 @@ class URLBuildcacheEntry:
         manifest_name: str,
         component_type: BuildcacheComponent,
         compression: str = "none",
+        **kwargs,
     ) -> None:
         """Convenience method to push a local file to a mirror as a blob.  Both manifest
         and blob are pushed as a component of the given component_type.  If ``compression``
@@ -621,7 +623,7 @@ class URLBuildcacheEntry:
             )
             cls.push_blob(mirror_url, blob_to_push, record)
             cls.push_manifest(
-                mirror_url, manifest_name, manifest, tmpdir, component_type=component_type
+                mirror_url, manifest_name, manifest, tmpdir, component_type=component_type, **kwargs
             )
 
     def push_binary_package(
@@ -1016,6 +1018,7 @@ class URLBuildcacheEntryV2(URLBuildcacheEntry):
         tmpdir: str,
         component_type: BuildcacheComponent = BuildcacheComponent.SPEC,
         signing_key: Optional[str] = None,
+        **kwargs,
     ) -> None:
         raise BuildcacheEntryError("v2 buildcache layout is unaware of manifests and blobs")
 
@@ -1027,6 +1030,7 @@ class URLBuildcacheEntryV2(URLBuildcacheEntry):
         manifest_name: str,
         component_type: BuildcacheComponent,
         compression: str = "none",
+        **kwargs,
     ) -> None:
         raise BuildcacheEntryError("v2 buildcache layout is unaware of manifests and blobs")
 
@@ -1358,7 +1362,7 @@ class MirrorMetadata:
 
     __slots__ = ("url", "version", "view")
 
-    def __init__(self, url: str, version: int, view: Optional[str] = None):
+    def __init__(self, url: str, version: int = CURRENT_BUILD_CACHE_LAYOUT_VERSION, view: Optional[str] = None):
         self.url = url
         self.version = version
         self.view = view

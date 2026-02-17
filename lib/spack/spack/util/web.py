@@ -8,6 +8,7 @@ import functools
 import io
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -86,6 +87,54 @@ def retry_on_transient_error(
         raise AssertionError("unreachable")
 
     return wrapper
+
+
+class Retry:
+    """Wrapper class around retry logic"""
+
+    def __init__(
+        self,
+        total: int = 5,
+        backoff_factor: float = 0.1,
+        backoff_jitter: float = 0.0,
+        backoff_max: float = 120.
+    ):
+        self.total = total
+        self.count = 0
+        self.backoff_factor = backoff_factor
+        self.backoff_jitter = backoff_jitter
+        self.backoff_max = backoff_max
+
+    def is_last_attempt(self):
+        """Return if this the retry counter is on last attempt"""
+        return self.count == self.max
+
+    def is_exhausted(self):
+        """Return if this the retry counter is exhausted"""
+        return self.count > self.max - 1
+
+    def reset(self):
+        """Reset the retry counter"""
+        self.count = 0
+
+    def increment(self):
+        """Increment the attempt counter"""
+        self.count += 1
+
+    def sleep(self):
+        """Sleep for the current attempts backoff waiting period"""
+        backoff: float = self.backoff_factor * (2 ** self.count)
+        if self.backoff_jitter != 0.0:
+            backoff += random.random() * self.backoff_jitter
+        backoff = float(max(0, min(self.backoff_max, backoff)))
+        time.sleep(backoff)
+
+    def __iter__(self):
+        """Convenient iterator function that handles doing backoff automatically"""
+        while not self.is_exhausted():
+            self.increment()
+            yield self.count
+            self.sleep()
 
 
 class DetailedHTTPError(HTTPError):

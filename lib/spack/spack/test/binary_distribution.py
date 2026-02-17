@@ -406,7 +406,7 @@ def test_generate_package_index_failure(monkeypatch, tmp_path: pathlib.Path, cap
     test_url = "file:///fake/keys/dir"
 
     with pytest.raises(GenerateIndexError, match="Unable to generate package index"):
-        spack.binary_distribution._url_generate_package_index(test_url, str(tmp_path))
+        spack.binary_distribution._url_update_index(MirrorMetadata(test_url), str(tmp_path))
 
     assert (
         "Warning: Encountered problem listing packages at "
@@ -426,7 +426,7 @@ def test_generate_indices_exception(monkeypatch, tmp_path: pathlib.Path, capfd):
         spack.binary_distribution.generate_key_index(url, str(tmp_path))
 
     with pytest.raises(GenerateIndexError, match="Unable to generate package index"):
-        spack.binary_distribution._url_generate_package_index(url, str(tmp_path))
+        spack.binary_distribution._url_update_index(MirrorMetadata(url), str(tmp_path))
 
     assert f"Encountered problem listing packages at {url}" in capfd.readouterr().err
 

@@ -292,7 +292,7 @@ class BinaryCacheIndex:
             for new_entry in found_list:
                 current_list.add(new_entry.strip_view())
 
-    def update(self, with_cooldown: bool = False) -> None:
+    def update(self, mirror_metadata: Optional[MirrorMetadata] = None, with_cooldown: bool = False) -> None:
         """Make sure local cache of buildcache index files is up to date.
         If the same mirrors are configured as the last time this was called
         and none of the remote buildcache indices have changed, calling this
@@ -300,13 +300,23 @@ class BinaryCacheIndex:
         to confirm it is the same as what is stored locally.  Otherwise, the
         buildcache ``index.json`` and ``index.json.hash`` files are retrieved
         from each configured mirror and stored locally (both in memory and
-        on disk under ``_index_cache_root``)."""
+        on disk under ``_index_cache_root``).
+
+        Args:
+            mirror_metadata: Specific mirror to update the cached index for
+            with_cooldown: Enforce a cooldown period to avoid repeated calls to update
+        """
         self._init_local_index_cache()
-        configured_mirrors = [
-            MirrorMetadata(m.fetch_url, layout_version, m.fetch_view)
-            for m in spack.mirrors.mirror.MirrorCollection(binary=True).values()
-            for layout_version in m.supported_layout_versions
-        ]
+
+        # Determine which binary caches to update the index cache for
+        # If not specified, update for all configured mirrors
+        configured_mirrors = mirror_metadata
+        if not configured_mirrors:
+            configured_mirrors = [
+                MirrorMetadata(m.fetch_url, layout_version, m.fetch_view)
+                for m in spack.mirrors.mirror.MirrorCollection(binary=True).values()
+                for layout_version in m.supported_layout_versions
+            ]
         items_to_remove = []
         spec_cache_clear_needed = False
         spec_cache_regenerate_needed = not self._mirrors_for_spec
@@ -639,124 +649,142 @@ def select_signing_key() -> str:
     return keys[0]
 
 
-def _push_index(db: BuildCacheDatabase, temp_dir: str, cache_prefix: str, name: str = ""):
+def _url_push_index(mirror_metadata: MirrorMetadata, db: BuildCacheDatabase, **kwargs):
     """Generate the index, compute its hash, and push the files to the mirror"""
-    index_json_path = os.path.join(temp_dir, spack.database.INDEX_JSON_FILE)
-    with open(index_json_path, "w", encoding="utf-8") as f:
-        db._write_to_file(f)
+    # Only support updating the index for mirrors using the the current version
+    assert mirror_metadata.version == CURRENT_BUILD_CACHE_LAYOUT_VERSION
 
-    cache_class = get_url_buildcache_class(layout_version=CURRENT_BUILD_CACHE_LAYOUT_VERSION)
+    # Ensure the database file is up-to-date
+    db._write()
+
+    # Attempt to upload the index
+    cache_class = get_url_buildcache_class(layout_version=mirror_metadata.version)
     cache_class.push_local_file_as_blob(
-        index_json_path,
-        cache_prefix,
-        url_util.join(name, "index") if name else "index",
+        db._index_path,
+        mirror_metadata.url,
+        url_util.join(mirror_metadata.view, "index") if mirror_metadata.view else "index",
         BuildcacheComponent.INDEX,
         compression="none",
+        **kwargs
     )
-    cache_class.maybe_push_layout_json(cache_prefix)
+    cache_class.maybe_push_layout_json(mirror_metadata.url)
 
 
-def _read_specs_and_push_index(
+def _read_specs(
     file_list: List[str],
     read_method: Callable[[str], URLBuildcacheEntry],
-    name: str,
     filter_fn: Callable[[str], bool],
-    cache_prefix: str,
     db: BuildCacheDatabase,
-    temp_dir: str,
-    *,
-    timer=timer.NULL_TIMER,
 ):
-    """Read listed specs, generate the index, and push it to the mirror.
+    """Read filtered listed specs into a database to generate an index
 
     Args:
         file_list: List of urls or file paths pointing at spec files to read
         read_method: A function taking a single argument, either a url or a file path,
             and which reads the spec file at that location, and returns the spec.
-        cache_prefix: prefix of the build cache on s3 where index should be pushed.
         db: A spack database used for adding specs and then writing the index.
-        temp_dir: Location to write index.json and hash for pushing
     """
-    with timer.measure("read"):
-        for file in file_list:
-            # All supported versions of build caches put the hash as the last
-            # parameter before the extension
-            try:
-                x = file.split("/")[-1].split("-")[-1].split(".")[0]
-            except IndexError:
-                raise GenerateIndexError(f"Malformed metadata file name detected {file}")
+    for file in file_list:
+        # All supported versions of build caches put the hash as the last
+        # parameter before the extension
+        try:
+            x = file.split("/")[-1].split("-")[-1].split(".")[0]
+        except IndexError:
+            raise GenerateIndexError(f"Malformed metadata file name detected {file}")
 
-            if not filter_fn(x):
-                continue
+        if not filter_fn(x):
+            continue
 
-            cache_entry: Optional[URLBuildcacheEntry] = None
-            try:
-                cache_entry = read_method(file)
-                spec_dict = cache_entry.fetch_metadata()
-                fetched_spec = spack.spec.Spec.from_dict(spec_dict)
-            except Exception as e:
-                tty.warn(f"Unable to fetch spec for manifest {file} due to: {e}")
-                continue
-            finally:
-                if cache_entry:
-                    cache_entry.destroy()
-            db.add(fetched_spec)
-            db.mark(fetched_spec, "in_buildcache", True)
-
-    with timer.measure("push"):
-        _push_index(db, temp_dir, cache_prefix, name)
+        cache_entry: Optional[URLBuildcacheEntry] = None
+        try:
+            cache_entry = read_method(file)
+            spec_dict = cache_entry.fetch_metadata()
+            fetched_spec = spack.spec.Spec.from_dict(spec_dict)
+        except Exception as e:
+            tty.warn(f"Unable to fetch spec for manifest {file} due to: {e}")
+            continue
+        finally:
+            if cache_entry:
+                cache_entry.destroy()
+        db.add(fetched_spec)
+        db.mark(fetched_spec, "in_buildcache", True)
 
 
-def _url_generate_package_index(
-    url: str,
+def _url_update_index(
+    mirror_metadata: MirrorMetadata,
     tmpdir: str,
-    db: Optional[BuildCacheDatabase] = None,
-    name: str = "",
+    append: bool = False,
     filter_fn: Callable[[str], bool] = lambda x: True,
     *,
     timer=timer.NULL_TIMER,
+    retry: web_util.Retry = web_util.Retry(),
 ):
     """Create or replace the build cache index on the given mirror.  The
     buildcache index contains an entry for each binary package under the
     cache_prefix.
 
     Args:
-        url: Base url of binary mirror.
+        mirror_metadata: Metadata for binary mirror.
+        tmpdir: Temporary directory workspace for storing update index data
 
     Return:
         None
     """
-    with tempfile.TemporaryDirectory(dir=spack.stage.get_stage_root()) as tmpspecsdir:
-        try:
-            with timer.measure("list"):
+    # Iterate until success
+    errmsg = f"Encountered a problem pushing package index to {mirror_metadata}"
+    for attempt in retry:
+        # Update the local copy of the current index. We don't want to push an out of date index
+        # if multiple index operations happen around the same time
+        BINARY_INDEX.update(mirror_metadata)
+
+        with timer.measure("list"):
+            # Update the cache listing
+            try:
                 filename_to_mtime_mapping, read_fn = get_entries_from_cache(
-                    url, tmpspecsdir, component_type=BuildcacheComponent.SPEC
+                    mirror_metadata, tmpdir, component_type=BuildcacheComponent.SPEC
                 )
-            file_list = list(filename_to_mtime_mapping.keys())
-        except ListMirrorSpecsError as e:
-            raise GenerateIndexError(f"Unable to generate package index: {e}") from e
+                file_list = list(filename_to_mtime_mapping.keys())
+            except ListMirrorSpecsError as e:
+                raise GenerateIndexError(f"Unable to generate package index: {e}") from e
 
-        tty.debug(f"Retrieving spec descriptor files from {url} to build index")
+        tty.debug(f"Retrieving spec descriptor files from {mirror_metadata} to build index")
 
-        if not db:
-            db = BuildCacheDatabase(tmpdir)
-            db._write()
+        # Get the current index cache index and etag if it exists
+        # Index updates to S3 use an IfMatch option to avoid writing output date
+        # indices
+        cache_index = BINARY_INDEX._local_index_cache.get(str(mirror_metadata))
+        cache_etag = None
+        if cache_index:
+            cache_etag = cache_index["etag"]
+
+        # Initialize a database for generating the index
+        db = BuildCacheDatabase(tmpdir)
+        db._write()
+        # For appending Load the current state of the view index from the cache into the database
+        if append and cache_index:
+            cache_key = cache_index["index_path"]
+            db._read_from_file(BINARY_INDEX._index_file_cache.cache_path(cache_key))
 
         try:
-            _read_specs_and_push_index(
-                file_list,
-                read_fn,
-                name,
-                filter_fn,
-                url,
-                db,
-                str(db.database_directory),
-                timer=timer,
-            )
+            # Read the specs from the cache into the database db
+            with timer.measure("read"):
+                _read_specs(file_list, read_fn, filter_fn, db)
+
+            # Push the index to the cache.
+            # Option `IfMatch` is used by S3 services to prevent races with index updates
+            # TODO: `IfMatch` functionality needs to be extended to other cache endpoints.
+            # TODO: Rewrite how we manage indices. Passing URL type specific flags at this
+            #       level is not great.
+            with timer.measure("push"):
+                _url_push_index(mirror_metadata, db, IfMatch=cache_etag)
+
+            break
         except Exception as e:
-            raise GenerateIndexError(
-                f"Encountered problem pushing package index to {url}: {e}"
-            ) from e
+            if retry.is_last_attempt():
+                raise GenerateIndexError(errmsg) from e
+            else:
+                tty.warn(errmsg)
+                tty.info("Retrying...")
 
 
 def generate_key_index(mirror_url: str, tmpdir: str) -> None:
@@ -1240,8 +1268,7 @@ def _url_push(
 
     if update_index:
         index_tmpdir = os.path.join(tmpdir, "index")
-        os.mkdir(index_tmpdir)
-        _url_generate_package_index(out_url, index_tmpdir)
+        _url_update_index(MirrorMetadata(out_url), index_tmpdir)
 
     return skipped, errors
 
