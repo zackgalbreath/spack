@@ -292,7 +292,9 @@ class BinaryCacheIndex:
             for new_entry in found_list:
                 current_list.add(new_entry.strip_view())
 
-    def update(self, mirror_metadata: Optional[MirrorMetadata] = None, with_cooldown: bool = False) -> None:
+    def update(
+        self, mirror_metadata: Optional[MirrorMetadata] = None, with_cooldown: bool = False
+    ) -> None:
         """Make sure local cache of buildcache index files is up to date.
         If the same mirrors are configured as the last time this was called
         and none of the remote buildcache indices have changed, calling this
@@ -310,8 +312,10 @@ class BinaryCacheIndex:
 
         # Determine which binary caches to update the index cache for
         # If not specified, update for all configured mirrors
-        configured_mirrors = mirror_metadata
-        if not configured_mirrors:
+        configured_mirrors = []
+        if mirror_metadata is not None:
+            configured_mirrors = [mirror_metadata]
+        else:
             configured_mirrors = [
                 MirrorMetadata(m.fetch_url, layout_version, m.fetch_view)
                 for m in spack.mirrors.mirror.MirrorCollection(binary=True).values()
@@ -660,12 +664,12 @@ def _url_push_index(mirror_metadata: MirrorMetadata, db: BuildCacheDatabase, **k
     # Attempt to upload the index
     cache_class = get_url_buildcache_class(layout_version=mirror_metadata.version)
     cache_class.push_local_file_as_blob(
-        db._index_path,
+        db._index_path.as_posix(),
         mirror_metadata.url,
         url_util.join(mirror_metadata.view, "index") if mirror_metadata.view else "index",
         BuildcacheComponent.INDEX,
         compression="none",
-        **kwargs
+        **kwargs,
     )
     cache_class.maybe_push_layout_json(mirror_metadata.url)
 
@@ -741,7 +745,7 @@ def _url_update_index(
             # Update the cache listing
             try:
                 filename_to_mtime_mapping, read_fn = get_entries_from_cache(
-                    mirror_metadata, tmpdir, component_type=BuildcacheComponent.SPEC
+                    mirror_metadata.url, tmpdir, component_type=BuildcacheComponent.SPEC
                 )
                 file_list = list(filename_to_mtime_mapping.keys())
             except ListMirrorSpecsError as e:

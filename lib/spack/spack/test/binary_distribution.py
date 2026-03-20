@@ -43,6 +43,7 @@ from spack.url_buildcache import (
     INDEX_MANIFEST_FILE,
     BuildcacheComponent,
     BuildcacheEntryError,
+    MirrorMetadata,
     URLBuildcacheEntry,
     URLBuildcacheEntryV2,
     compression_writer,

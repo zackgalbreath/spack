@@ -582,7 +582,9 @@ class URLBuildcacheEntry:
             mirror_url, *cls.get_relative_path_components(component_type), manifest_file_name
         )
 
-        web_util.push_to_url(manifest_path, manifest_destination_url, keep_original=False, extra_args=kwargs)
+        web_util.push_to_url(
+            manifest_path, manifest_destination_url, keep_original=False, extra_args=kwargs
+        )
 
     @classmethod
     def push_local_file_as_blob(
@@ -623,7 +625,12 @@ class URLBuildcacheEntry:
             )
             cls.push_blob(mirror_url, blob_to_push, record)
             cls.push_manifest(
-                mirror_url, manifest_name, manifest, tmpdir, component_type=component_type, **kwargs
+                mirror_url,
+                manifest_name,
+                manifest,
+                tmpdir,
+                component_type=component_type,
+                **kwargs,
             )
 
     def push_binary_package(
@@ -1362,7 +1369,12 @@ class MirrorMetadata:
 
     __slots__ = ("url", "version", "view")
 
-    def __init__(self, url: str, version: int = CURRENT_BUILD_CACHE_LAYOUT_VERSION, view: Optional[str] = None):
+    def __init__(
+        self,
+        url: str,
+        version: int = CURRENT_BUILD_CACHE_LAYOUT_VERSION,
+        view: Optional[str] = None,
+    ):
         self.url = url
         self.version = version
         self.view = view

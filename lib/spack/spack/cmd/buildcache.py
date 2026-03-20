@@ -41,6 +41,7 @@ from ..enums import InstallRecordStatus
 from ..url_buildcache import (
     BuildcacheComponent,
     BuildcacheEntryError,
+    MirrorMetadata,
     URLBuildcacheEntry,
     check_mirror_for_layout,
     get_entries_from_cache,

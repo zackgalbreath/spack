@@ -97,7 +97,7 @@ class Retry:
         total: int = 5,
         backoff_factor: float = 0.1,
         backoff_jitter: float = 0.0,
-        backoff_max: float = 120.
+        backoff_max: float = 120.0,
     ):
         self.total = total
         self.count = 0
@@ -107,11 +107,11 @@ class Retry:
 
     def is_last_attempt(self):
         """Return if this the retry counter is on last attempt"""
-        return self.count == self.max
+        return self.count == self.total
 
     def is_exhausted(self):
         """Return if this the retry counter is exhausted"""
-        return self.count > self.max - 1
+        return self.count > self.total - 1
 
     def reset(self):
         """Reset the retry counter"""
