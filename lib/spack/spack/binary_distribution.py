@@ -32,6 +32,7 @@ import spack.caches
 import spack.config
 import spack.database
 import spack.deptypes as dt
+import spack.environment as ev
 import spack.error
 import spack.hash_types as ht
 import spack.hooks
@@ -538,12 +539,14 @@ class BinaryIndexCache:
         # regenerate the spec cache as a result.
         return True
 
-    def index_path(self, mirror_metadata: MirrorMetadata) -> Optional[pathlib.Path]:
+    @contextlib.contextmanager
+    def read_index(self, mirror_metadata: MirrorMetadata) -> Optional[IO[str]]:
         cache_entry = self._local_index_cache.get(str(mirror_metadata))
         if not cache_entry:
             return None
         cache_key = cache_entry["index_path"]
-        return self._index_file_cache.cache_path(cache_key)
+        with self._index_file_cache.read_transaction(cache_key) as f:
+            yield f
 
 
 def binary_index_location():
@@ -734,8 +737,17 @@ def _read_specs(
 
         cache_entry: Optional[URLBuildcacheEntry] = None
         try:
-            # First attempt to get the spec from the local cache
-            spec = BINARY_INDEX._known_specs.get(spec_hash)
+            spec = None
+            # Try to get the spec from the current active environment
+            env = ev.active_environment()
+            if env:
+                spec = env.specs_by_hash.get(spec_hash)
+
+            # Try to get the spec from the local index cache
+            if not spec:
+                spec = BINARY_INDEX._known_specs.get(spec_hash)
+
+            # Finally try fetching the spec from the remote
             if not spec:
                 cache_entry = read_method(file)
                 spec_dict = cache_entry.fetch_metadata()
@@ -746,6 +758,10 @@ def _read_specs(
         finally:
             if cache_entry:
                 cache_entry.destroy()
+
+        if not spec:
+            raise GenerateIndexError(f"Could not find spec for hash {spec_hash}")
+
         db.add(spec)
         db.mark(spec, "in_buildcache", True)
 
@@ -789,14 +805,14 @@ def _url_update_index(
         db._write()
 
         try:
-            # Update the local cached index
+            # Update the local cached index and spec list
             BINARY_INDEX.update(mirror_metadata)
 
             # For appending Load the current state of the index from the cache into the database
-            index_path = BINARY_INDEX.index_path(mirror_metadata)
-            if index_path:
-                # db._read_from_file(BINARY_INDEX._index_file_cache.cache_path(cache_key))
-                db._read_from_file(index_path)
+            if append:
+                with BINARY_INDEX.read_index(mirror_metadata) as f:
+                    if f is not None:
+                        db._read_from_stream(f)
 
             # Read the specs from the cache into the database db
             with timer.measure("read"):
