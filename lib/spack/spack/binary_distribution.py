@@ -26,7 +26,7 @@ import urllib.request
 import warnings
 from collections import defaultdict
 from contextlib import closing
-from typing import IO, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union, cast
+from typing import Any, IO, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union, cast
 
 import spack.caches
 import spack.config
@@ -144,9 +144,9 @@ class FetchCacheError(Exception):
         super().__init__(self.message)
 
 
-class BinaryCacheIndex:
+class BinaryIndexCache:
     """
-    The BinaryCacheIndex tracks what specs are available on (usually remote)
+    The BinaryIndexCache tracks what specs are available on (usually remote)
     binary caches.
 
     This index is "best effort", in the sense that whenever we don't find
@@ -453,6 +453,32 @@ class BinaryCacheIndex:
         if spec_cache_regenerate_needed:
             self.regenerate_spec_cache(clear_existing=spec_cache_clear_needed)
 
+    def get_index_fetcher(self, mirror_metadata: MirrorMetadata, cache_entry={}) -> IndexFetcher:
+        """Get the index fetcher for a mirror metadata"""
+        mirror_url = mirror_metadata.url
+        scheme = urllib.parse.urlparse(mirror_url).scheme
+        if not cache_entry:
+            cache_entry = self._local_index_cache.get(str(mirror_metadata), {})
+
+        if scheme == "oci":
+            # TODO: Actually etag and OCI are not mutually exclusive...
+            return OCIIndexFetcher(mirror_metadata, cache_entry.get("index_hash", None))
+        elif cache_entry.get("etag"):
+            if mirror_metadata.version < 3:
+                return EtagIndexFetcherV2(mirror_metadata, cache_entry["etag"])
+            else:
+                return EtagIndexFetcher(mirror_metadata, cache_entry["etag"])
+
+        else:
+            if mirror_metadata.version < 3:
+                return DefaultIndexFetcherV2(
+                    mirror_metadata, local_hash=cache_entry.get("index_hash", None)
+                )
+            else:
+                return DefaultIndexFetcher(
+                    mirror_metadata, local_hash=cache_entry.get("index_hash", None)
+                )
+
     def _fetch_and_cache_index(self, mirror_metadata: MirrorMetadata, cache_entry={}):
         """Fetch a buildcache index file from a remote mirror and cache it.
 
@@ -484,7 +510,7 @@ class BinaryCacheIndex:
             if not web_util.url_exists(index_url):
                 raise BuildcacheIndexNotExists(f"Index not found in cache {index_url}")
 
-        fetcher: IndexFetcher = get_index_fetcher(scheme, mirror_metadata, cache_entry)
+        fetcher: IndexFetcher = self.get_index_fetcher(scheme, mirror_metadata, cache_entry)
         result = fetcher.conditional_fetch()
 
         # Nothing to do
@@ -512,15 +538,23 @@ class BinaryCacheIndex:
         # regenerate the spec cache as a result.
         return True
 
+    def index_path(self, mirror_metadata: MirrorMetadata) -> Optional[str]:
+        cache_entry = self._local_index_cache.get(str(mirror_metadata))
+        if not cache_entry:
+            return None
+        cache_key = cache_entry["index_path"]
+        return self._index_file_cache.cache_path(cache_key)
+
+
 
 def binary_index_location():
-    """Set up a BinaryCacheIndex for remote buildcache dbs in the user's homedir."""
+    """Set up a BinaryIndexCache for remote buildcache dbs in the user's homedir."""
     cache_root = os.path.join(spack.caches.misc_cache_location(), "indices")
     return spack.util.path.canonicalize_path(cache_root)
 
 
 #: Default binary cache index instance
-BINARY_INDEX = cast(BinaryCacheIndex, spack.llnl.util.lang.Singleton(BinaryCacheIndex))
+BINARY_INDEX = cast(BinaryIndexCache, spack.llnl.util.lang.Singleton(BinaryIndexCache))
 
 
 def compute_hash(data):
@@ -692,26 +726,29 @@ def _read_specs(
         # All supported versions of build caches put the hash as the last
         # parameter before the extension
         try:
-            x = file.split("/")[-1].split("-")[-1].split(".")[0]
+            spec_hash = file.split("/")[-1].split("-")[-1].split(".")[0]
         except IndexError:
             raise GenerateIndexError(f"Malformed metadata file name detected {file}")
 
-        if not filter_fn(x):
+        if not filter_fn(spec_hash):
             continue
 
         cache_entry: Optional[URLBuildcacheEntry] = None
         try:
-            cache_entry = read_method(file)
-            spec_dict = cache_entry.fetch_metadata()
-            fetched_spec = spack.spec.Spec.from_dict(spec_dict)
+            # First attempt to get the spec from the local cache
+            spec = BINARY_INDEX._known_specs.get(spec_hash)
+            if not spec:
+                cache_entry = read_method(file)
+                spec_dict = cache_entry.fetch_metadata()
+                spec = spack.spec.Spec.from_dict(spec_dict)
         except Exception as e:
             tty.warn(f"Unable to fetch spec for manifest {file} due to: {e}")
             continue
         finally:
             if cache_entry:
                 cache_entry.destroy()
-        db.add(fetched_spec)
-        db.mark(fetched_spec, "in_buildcache", True)
+        db.add(spec)
+        db.mark(spec, "in_buildcache", True)
 
 
 def _url_update_index(
@@ -735,12 +772,7 @@ def _url_update_index(
         None
     """
     # Iterate until success
-    errmsg = f"Encountered a problem pushing package index to {mirror_metadata}"
     for attempt in retry:
-        # Update the local copy of the current index. We don't want to push an out of date index
-        # if multiple index operations happen around the same time
-        BINARY_INDEX.update(mirror_metadata)
-
         with timer.measure("list"):
             # Update the cache listing
             try:
@@ -753,37 +785,33 @@ def _url_update_index(
 
         tty.debug(f"Retrieving spec descriptor files from {mirror_metadata} to build index")
 
-        # Get the current index cache index and etag if it exists
-        # Index updates to S3 use an IfMatch option to avoid writing output date
-        # indices
-        cache_index = BINARY_INDEX._local_index_cache.get(str(mirror_metadata))
-        cache_etag = None
-        if cache_index:
-            cache_etag = cache_index["etag"]
-
         # Initialize a database for generating the index
         db = BuildCacheDatabase(tmpdir)
         db._write()
-        # For appending Load the current state of the view index from the cache into the database
-        if append and cache_index:
-            cache_key = cache_index["index_path"]
-            db._read_from_file(BINARY_INDEX._index_file_cache.cache_path(cache_key))
 
         try:
+            # Update the local cached index
+            BINARY_INDEX.update(mirror_metadata)
+
+            # For appending Load the current state of the index from the cache into the database
+            index_path = BINARY_INDEX.index_path(mirror_metadata)
+            if index_path:
+                # db._read_from_file(BINARY_INDEX._index_file_cache.cache_path(cache_key))
+                db._read_from_file(index_path)
+
             # Read the specs from the cache into the database db
             with timer.measure("read"):
                 _read_specs(file_list, read_fn, filter_fn, db)
 
-            # Push the index to the cache.
-            # Option `IfMatch` is used by S3 services to prevent races with index updates
-            # TODO: `IfMatch` functionality needs to be extended to other cache endpoints.
-            # TODO: Rewrite how we manage indices. Passing URL type specific flags at this
-            #       level is not great.
             with timer.measure("push"):
-                _url_push_index(mirror_metadata, db, IfMatch=cache_etag)
+                # Update the local copy of the current index. We don't want to push an out of date index
+                # if multiple index operations happen around the same time
+                index_fetcher = BINARY_INDEX.get_index_fetcher(mirror_metadata)
+                index_fetcher.push_index(db)
 
             break
         except Exception as e:
+            errmsg = f"Encountered a problem pushing package index to {mirror_metadata}"
             if retry.is_last_attempt():
                 raise GenerateIndexError(errmsg) from e
             else:
@@ -2587,6 +2615,9 @@ FetchIndexResult = collections.namedtuple("FetchIndexResult", "etag hash data fr
 
 
 class IndexFetcher:
+    def __init__(self, mirror_metadata: MirrorMetadata):
+        self.mirror_metadata = mirror_metadata
+
     def conditional_fetch(self) -> FetchIndexResult:
         raise NotImplementedError(f"{self.__class__.__name__} is abstract")
 
@@ -2631,12 +2662,20 @@ class IndexFetcher:
 
         return (computed_hash, blob_result)
 
+    def _push_args(self) -> Dict[str, Any]:
+        return {}
+
+    def push_index(self, db: spack.database.Database):
+        """Push a database as the index back to the cache"""
+        _url_push_index(self.mirror_metadata, db, **self._push_args())
+
 
 class DefaultIndexFetcherV2(IndexFetcher):
     """Fetcher for index.json, using separate index.json.hash as cache invalidation strategy"""
 
-    def __init__(self, url, local_hash, urlopen=web_util.urlopen):
-        self.url = url
+    def __init__(self, mirror_metadata, local_hash, urlopen=web_util.urlopen):
+        super().__init__(mirror_metadata)
+        self.url = mirror_metadata.url
         self.local_hash = local_hash
         self.urlopen = urlopen
         self.headers = {"User-Agent": web_util.SPACK_USER_AGENT}
@@ -2706,8 +2745,10 @@ class DefaultIndexFetcherV2(IndexFetcher):
 class EtagIndexFetcherV2(IndexFetcher):
     """Fetcher for index.json, using ETags headers as cache invalidation strategy"""
 
-    def __init__(self, url, etag, urlopen=web_util.urlopen):
-        self.url = url
+    def __init__(self, mirror_metadata, etag, urlopen=web_util.urlopen):
+        super().__init__(mirror_metadata)
+
+        self.url = mirror_metadata.url
         self.etag = etag
         self.urlopen = urlopen
 
@@ -2748,6 +2789,7 @@ class EtagIndexFetcherV2(IndexFetcher):
 
 class OCIIndexFetcher(IndexFetcher):
     def __init__(self, mirror_metadata: MirrorMetadata, local_hash, urlopen=None) -> None:
+        super().__init__(mirror_metadata)
         self.local_hash = local_hash
         self.ref = spack.oci.image.ImageReference.from_url(mirror_metadata.url)
         self.urlopen = urlopen or spack.oci.opener.urlopen
@@ -2804,6 +2846,7 @@ class DefaultIndexFetcher(IndexFetcher):
     """Fetcher for buildcache index, cache invalidation via manifest contents"""
 
     def __init__(self, mirror_metadata: MirrorMetadata, local_hash, urlopen=web_util.urlopen):
+        super().__init__(mirror_metadata)
         self.url = mirror_metadata.url
         self.view = mirror_metadata.view
         self.layout_version = mirror_metadata.version
@@ -2864,11 +2907,20 @@ class EtagIndexFetcher(IndexFetcher):
     scheme to determine whether an etag should be included in the return value."""
 
     def __init__(self, mirror_metadata: MirrorMetadata, etag, urlopen=web_util.urlopen):
+        super().__init__(mirror_metadata)
         self.url = mirror_metadata.url
         self.view = mirror_metadata.view
         self.layout_version = mirror_metadata.version
         self.etag = etag
         self.urlopen = urlopen
+
+    def _push_args(self) -> Dict[str, Any]:
+        args = {}
+        if self.url.startswith("s3://"):
+            args = {
+                "IfMatch": self.etag,
+            }
+        return args
 
     def conditional_fetch(self) -> FetchIndexResult:
         # Do a conditional fetch of the index manifest (i.e. using If-None-Match header)
@@ -2904,29 +2956,6 @@ class EtagIndexFetcher(IndexFetcher):
             data=result,
             fresh=False,
         )
-
-
-def get_index_fetcher(
-    scheme: str, mirror_metadata: MirrorMetadata, cache_entry: Dict[str, str]
-) -> IndexFetcher:
-    if scheme == "oci":
-        # TODO: Actually etag and OCI are not mutually exclusive...
-        return OCIIndexFetcher(mirror_metadata, cache_entry.get("index_hash", None))
-    elif cache_entry.get("etag"):
-        if mirror_metadata.version < 3:
-            return EtagIndexFetcherV2(mirror_metadata.url, cache_entry["etag"])
-        else:
-            return EtagIndexFetcher(mirror_metadata, cache_entry["etag"])
-
-    else:
-        if mirror_metadata.version < 3:
-            return DefaultIndexFetcherV2(
-                mirror_metadata.url, local_hash=cache_entry.get("index_hash", None)
-            )
-        else:
-            return DefaultIndexFetcher(
-                mirror_metadata, local_hash=cache_entry.get("index_hash", None)
-            )
 
 
 class NoOverwriteException(spack.error.SpackError):

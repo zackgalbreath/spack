@@ -582,6 +582,7 @@ class URLBuildcacheEntry:
             mirror_url, *cls.get_relative_path_components(component_type), manifest_file_name
         )
 
+        print(f"writing: {manifest_destination_url}")
         web_util.push_to_url(
             manifest_path, manifest_destination_url, keep_original=False, extra_args=kwargs
         )
@@ -1088,13 +1089,13 @@ def check_mirror_for_layout(mirror: spack.mirrors.mirror.Mirror):
         )
         tty.warn(msg)
 
+_aws_sync_flag: bool
 
-def _entries_from_cache_aws_cli(url: str, tmpspecsdir: str, component_type: BuildcacheComponent):
+def _entries_from_cache_aws_cli(url: str, component_type: BuildcacheComponent):
     """Use aws cli to sync all manifests into a local temporary directory.
 
     Args:
         url: prefix of the build cache on s3
-        tmpspecsdir: path to temporary directory to use for writing files
         component_type: type of buildcache component to sync (spec, index, key, etc.)
 
     Return:
@@ -1117,50 +1118,32 @@ def _entries_from_cache_aws_cli(url: str, tmpspecsdir: str, component_type: Buil
         cache_entry.read_manifest(manifest_url=manifest_path)
         return cache_entry
 
-    include_pattern = cache_class.get_buildcache_component_include_pattern(component_type)
-    component_prefix = cache_class.get_relative_path_components(component_type)
-
-    sync_command_args = [
-        "s3",
-        "sync",
-        "--exclude",
-        "*",
-        "--include",
-        include_pattern,
-        url_util.join(url, *component_prefix),
-        tmpspecsdir,
-    ]
-
     # Use aws s3 ls to get mtimes of manifests
-    ls_command_args = ["s3", "ls", "--recursive", url]
+    include_pattern = re.compile(
+        cache_class.get_buildcache_component_include_pattern(
+            component_type
+        ).replace(".", "\\.").replace("*", ".*")
+    )
+    component_prefix = cache_class.get_relative_path_components(component_type)
+    ls_command_args = ["s3", "ls", "--recursive", url_util.join(url, *component_prefix)]
     s3_ls_regex = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\d+\s+(.+)$")
 
     filename_to_mtime: Dict[str, float] = {}
 
-    tty.debug(f"Using aws s3 sync to download manifests from {url} to {tmpspecsdir}")
-
     try:
-        aws(*sync_command_args, output=os.devnull, error=os.devnull)
-        file_list = fsys.find(tmpspecsdir, [include_pattern])
         read_fn = file_read_method
 
-        # Use `aws s3 ls` to get mtimes of manifests
+        # Use `aws s3 ls` to get mtimes of manifests as it is tends to be faster than list_objects_v2
         for line in aws(*ls_command_args, output=str, error=os.devnull).splitlines():
             match = s3_ls_regex.match(line)
             if match:
-                # Parse the url and use the S3 path of the file to derive the
-                # local path of the file (i.e. where `aws s3 sync` put it).
-                parsed_url = urllib.parse.urlparse(url)
-                s3_path = parsed_url.path.lstrip("/")
                 filename = match.group(2)
-                if s3_path and filename.startswith(s3_path):
-                    filename = filename[len(s3_path) :].lstrip("/")
-                local_path = url_util.join(tmpspecsdir, filename)
+                if not include_pattern.match(filename):
+                    continue
 
-                if Path(local_path).exists():
-                    filename_to_mtime[url_util.path_to_file_url(local_path)] = datetime.strptime(
-                        match.group(1), "%Y-%m-%d %H:%M:%S"
-                    ).timestamp()
+                filename_to_mtime[filename] = datetime.strptime(
+                    match.group(1), "%Y-%m-%d %H:%M:%S"
+                ).timestamp()
     except Exception as e:
         tty.warn("Failed to use aws s3 sync to retrieve specs, falling back to parallel fetch")
         raise e
@@ -1363,7 +1346,7 @@ def try_verify(specfile_path):
 class MirrorMetadata:
     """Simple class to hold a mirror url and a buildcache layout version
 
-    This class is used by BinaryCacheIndex to produce a key used to keep
+    This class is used by BinaryIndexCache to produce a key used to keep
     track of downloaded/processed buildcache index files from remote mirrors
     in some layout version."""
 

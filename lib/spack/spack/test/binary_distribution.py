@@ -278,7 +278,7 @@ def test_use_bin_index(monkeypatch, tmp_path: pathlib.Path, mutable_config):
     monkeypatch.setattr(
         spack.binary_distribution,
         "BINARY_INDEX",
-        spack.binary_distribution.BinaryCacheIndex(index_cache_root),
+        spack.binary_distribution.BinaryIndexCache(index_cache_root),
     )
 
     # Create a mirror, configure us to point at it, install a spec, and
@@ -293,7 +293,7 @@ def test_use_bin_index(monkeypatch, tmp_path: pathlib.Path, mutable_config):
 
     # Now the test
     buildcache_cmd("list", "-al")
-    spack.binary_distribution.BINARY_INDEX = spack.binary_distribution.BinaryCacheIndex(
+    spack.binary_distribution.BINARY_INDEX = spack.binary_distribution.BinaryIndexCache(
         index_cache_root
     )
     cache_list = buildcache_cmd("list", "-al")
@@ -311,7 +311,7 @@ def test_use_bin_index_active_env_with_view(
     monkeypatch.setattr(
         spack.binary_distribution,
         "BINARY_INDEX",
-        spack.binary_distribution.BinaryCacheIndex(index_cache_root),
+        spack.binary_distribution.BinaryIndexCache(index_cache_root),
     )
 
     # Create a mirror, configure us to point at it, install a spec, and
@@ -330,7 +330,7 @@ def test_use_bin_index_active_env_with_view(
 
     # Now the test
     buildcache_cmd("list", "-al")
-    spack.binary_distribution.BINARY_INDEX = spack.binary_distribution.BinaryCacheIndex(
+    spack.binary_distribution.BINARY_INDEX = spack.binary_distribution.BinaryIndexCache(
         index_cache_root
     )
     cache_list = buildcache_cmd("list", "-al")
@@ -348,7 +348,7 @@ def test_use_bin_index_with_view(
     monkeypatch.setattr(
         spack.binary_distribution,
         "BINARY_INDEX",
-        spack.binary_distribution.BinaryCacheIndex(index_cache_root),
+        spack.binary_distribution.BinaryIndexCache(index_cache_root),
     )
 
     # Create a mirror, configure us to point at it, install a spec, and
@@ -368,7 +368,7 @@ def test_use_bin_index_with_view(
 
     # Now the test
     buildcache_cmd("list", "-al")
-    spack.binary_distribution.BINARY_INDEX = spack.binary_distribution.BinaryCacheIndex(
+    spack.binary_distribution.BINARY_INDEX = spack.binary_distribution.BinaryIndexCache(
         index_cache_root
     )
     cache_list = buildcache_cmd("list", "-al")
