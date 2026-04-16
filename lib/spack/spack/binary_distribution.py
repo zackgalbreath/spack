@@ -453,7 +453,7 @@ class BinaryIndexCache:
         if spec_cache_regenerate_needed:
             self.regenerate_spec_cache(clear_existing=spec_cache_clear_needed)
 
-    def get_index_fetcher(self, mirror_metadata: MirrorMetadata, cache_entry={}) -> IndexFetcher:
+    def get_index_fetcher(self, mirror_metadata: MirrorMetadata, cache_entry={}) -> IndexHandler:
         """Get the index fetcher for a mirror metadata"""
         mirror_url = mirror_metadata.url
         scheme = urllib.parse.urlparse(mirror_url).scheme
@@ -462,20 +462,20 @@ class BinaryIndexCache:
 
         if scheme == "oci":
             # TODO: Actually etag and OCI are not mutually exclusive...
-            return OCIIndexFetcher(mirror_metadata, cache_entry.get("index_hash", None))
+            return OCIIndexHandler(mirror_metadata, cache_entry.get("index_hash", None))
         elif cache_entry.get("etag"):
             if mirror_metadata.version < 3:
-                return EtagIndexFetcherV2(mirror_metadata, cache_entry["etag"])
+                return EtagIndexHandlerV2(mirror_metadata, cache_entry["etag"])
             else:
-                return EtagIndexFetcher(mirror_metadata, cache_entry["etag"])
+                return EtagIndexHandler(mirror_metadata, cache_entry["etag"])
 
         else:
             if mirror_metadata.version < 3:
-                return DefaultIndexFetcherV2(
+                return DefaultIndexHandlerV2(
                     mirror_metadata, local_hash=cache_entry.get("index_hash", None)
                 )
             else:
-                return DefaultIndexFetcher(
+                return DefaultIndexHandler(
                     mirror_metadata, local_hash=cache_entry.get("index_hash", None)
                 )
 
@@ -510,7 +510,7 @@ class BinaryIndexCache:
             if not web_util.url_exists(index_url):
                 raise BuildcacheIndexNotExists(f"Index not found in cache {index_url}")
 
-        fetcher: IndexFetcher = self.get_index_fetcher(scheme, mirror_metadata, cache_entry)
+        fetcher: IndexHandler = self.get_index_fetcher(mirror_metadata, cache_entry)
         result = fetcher.conditional_fetch()
 
         # Nothing to do
@@ -538,13 +538,12 @@ class BinaryIndexCache:
         # regenerate the spec cache as a result.
         return True
 
-    def index_path(self, mirror_metadata: MirrorMetadata) -> Optional[str]:
+    def index_path(self, mirror_metadata: MirrorMetadata) -> Optional[pathlib.Path]:
         cache_entry = self._local_index_cache.get(str(mirror_metadata))
         if not cache_entry:
             return None
         cache_key = cache_entry["index_path"]
         return self._index_file_cache.cache_path(cache_key)
-
 
 
 def binary_index_location():
@@ -804,8 +803,6 @@ def _url_update_index(
                 _read_specs(file_list, read_fn, filter_fn, db)
 
             with timer.measure("push"):
-                # Update the local copy of the current index. We don't want to push an out of date index
-                # if multiple index operations happen around the same time
                 index_fetcher = BINARY_INDEX.get_index_fetcher(mirror_metadata)
                 index_fetcher.push_index(db)
 
@@ -2614,7 +2611,7 @@ class BuildcacheIndexNotExists(Exception):
 FetchIndexResult = collections.namedtuple("FetchIndexResult", "etag hash data fresh")
 
 
-class IndexFetcher:
+class IndexHandler:
     def __init__(self, mirror_metadata: MirrorMetadata):
         self.mirror_metadata = mirror_metadata
 
@@ -2665,12 +2662,12 @@ class IndexFetcher:
     def _push_args(self) -> Dict[str, Any]:
         return {}
 
-    def push_index(self, db: spack.database.Database):
+    def push_index(self, db: BuildCacheDatabase):
         """Push a database as the index back to the cache"""
         _url_push_index(self.mirror_metadata, db, **self._push_args())
 
 
-class DefaultIndexFetcherV2(IndexFetcher):
+class DefaultIndexHandlerV2(IndexHandler):
     """Fetcher for index.json, using separate index.json.hash as cache invalidation strategy"""
 
     def __init__(self, mirror_metadata, local_hash, urlopen=web_util.urlopen):
@@ -2742,7 +2739,7 @@ class DefaultIndexFetcherV2(IndexFetcher):
         return FetchIndexResult(etag=etag, hash=computed_hash, data=result, fresh=False)
 
 
-class EtagIndexFetcherV2(IndexFetcher):
+class EtagIndexHandlerV2(IndexHandler):
     """Fetcher for index.json, using ETags headers as cache invalidation strategy"""
 
     def __init__(self, mirror_metadata, etag, urlopen=web_util.urlopen):
@@ -2787,7 +2784,7 @@ class EtagIndexFetcherV2(IndexFetcher):
         )
 
 
-class OCIIndexFetcher(IndexFetcher):
+class OCIIndexHandler(IndexHandler):
     def __init__(self, mirror_metadata: MirrorMetadata, local_hash, urlopen=None) -> None:
         super().__init__(mirror_metadata)
         self.local_hash = local_hash
@@ -2842,7 +2839,7 @@ class OCIIndexFetcher(IndexFetcher):
         return FetchIndexResult(etag=None, hash=index_digest.digest, data=result, fresh=False)
 
 
-class DefaultIndexFetcher(IndexFetcher):
+class DefaultIndexHandler(IndexHandler):
     """Fetcher for buildcache index, cache invalidation via manifest contents"""
 
     def __init__(self, mirror_metadata: MirrorMetadata, local_hash, urlopen=web_util.urlopen):
@@ -2891,10 +2888,10 @@ class DefaultIndexFetcher(IndexFetcher):
         return FetchIndexResult(etag=etag, hash=computed_hash, data=result, fresh=False)
 
 
-class EtagIndexFetcher(IndexFetcher):
+class EtagIndexHandler(IndexHandler):
     """Fetcher for buildcache index, cache invalidation via ETags headers
 
-    This class differs from the :class:`DefaultIndexFetcher` in the following ways:
+    This class differs from the :class:`DefaultIndexHandler` in the following ways:
 
     1. It is provided with an etag value on creation, rather than an index checksum value. Note
     that since we never start out with an etag, the default fetcher must have been used initially
@@ -2917,9 +2914,7 @@ class EtagIndexFetcher(IndexFetcher):
     def _push_args(self) -> Dict[str, Any]:
         args = {}
         if self.url.startswith("s3://"):
-            args = {
-                "IfMatch": self.etag,
-            }
+            args = {"IfMatch": self.etag}
         return args
 
     def conditional_fetch(self) -> FetchIndexResult:

@@ -10,10 +10,8 @@ import json
 import os
 import re
 import shutil
-import urllib.parse
 from contextlib import closing, contextmanager
 from datetime import datetime
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
@@ -1089,7 +1087,9 @@ def check_mirror_for_layout(mirror: spack.mirrors.mirror.Mirror):
         )
         tty.warn(msg)
 
+
 _aws_sync_flag: bool
+
 
 def _entries_from_cache_aws_cli(url: str, component_type: BuildcacheComponent):
     """Use aws cli to sync all manifests into a local temporary directory.
@@ -1120,9 +1120,9 @@ def _entries_from_cache_aws_cli(url: str, component_type: BuildcacheComponent):
 
     # Use aws s3 ls to get mtimes of manifests
     include_pattern = re.compile(
-        cache_class.get_buildcache_component_include_pattern(
-            component_type
-        ).replace(".", "\\.").replace("*", ".*")
+        cache_class.get_buildcache_component_include_pattern(component_type)
+        .replace(".", "\\.")
+        .replace("*", ".*")
     )
     component_prefix = cache_class.get_relative_path_components(component_type)
     ls_command_args = ["s3", "ls", "--recursive", url_util.join(url, *component_prefix)]
@@ -1133,7 +1133,8 @@ def _entries_from_cache_aws_cli(url: str, component_type: BuildcacheComponent):
     try:
         read_fn = file_read_method
 
-        # Use `aws s3 ls` to get mtimes of manifests as it is tends to be faster than list_objects_v2
+        # Use `aws s3 ls` to get mtimes of manifests as it is tends to be faster than
+        # list_objects_v2
         for line in aws(*ls_command_args, output=str, error=os.devnull).splitlines():
             match = s3_ls_regex.match(line)
             if match:
