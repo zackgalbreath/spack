@@ -555,11 +555,12 @@ class BinaryIndexCache:
     @contextlib.contextmanager
     def read_index(self, mirror_metadata: MirrorMetadata) -> Iterator[Optional[IO[str]]]:
         cache_entry = self._local_index_cache.get(str(mirror_metadata), {})
-        if not cache_entry:
+        try:
+            cache_key = cache_entry["index_path"]
+            with self._index_file_cache.read_transaction(cache_key) as f:
+                yield f
+        except KeyError:
             yield None
-        cache_key = cache_entry["index_path"]
-        with self._index_file_cache.read_transaction(cache_key) as f:
-            yield f
 
 
 def binary_index_location():
@@ -710,6 +711,14 @@ def _url_push_index(mirror_metadata: MirrorMetadata, db: BuildCacheDatabase, **k
     # Ensure the database file is up-to-date
     db._write()
 
+    index_path = (
+        url_util.join(mirror_metadata.view, "index") if mirror_metadata.view else "index",
+    )
+    db_path = (db._index_path.as_posix(),)
+    print(f"pushing index: {mirror_metadata.url}/{index_path}")
+    print(f"db path: {db_path}")
+    print(f"extra args: {kwargs}")
+
     # Attempt to upload the index
     cache_class = get_url_buildcache_class(layout_version=mirror_metadata.version)
     cache_class.push_local_file_as_blob(
@@ -854,7 +863,7 @@ def _url_update_index(
                 raise GenerateIndexError(errmsg) from e
             else:
                 tty.warn(errmsg)
-                tty.info("Retrying...")
+                tty.info(f"Retrying update index {mirror_metadata}")
 
 
 def generate_key_index(mirror_url: str, tmpdir: str) -> None:
@@ -2900,31 +2909,32 @@ class DefaultIndexHandler(IndexHandler):
             response = self.urlopen(
                 urllib.request.Request(url_index_manifest, headers=self.headers)
             )
-        except OSError as e:
+
+            with response:
+                index_blob_record = self.get_index_manifest(response)
+
+            # Early exit if our cache is up to date.
+            if self.local_hash and self.local_hash == index_blob_record.checksum:
+                return FetchIndexResult(etag=None, hash=None, data=None, fresh=True)
+
+            # Otherwise, download the index blob
+            cache_entry = cache_class(self.url, allow_unsigned=True)
+            computed_hash, result = self.fetch_index_blob(cache_entry, index_blob_record)
+            print(result)
+            cache_entry.destroy()
+
+            # For now we only handle etags on http(s), since 304 error handling
+            # in s3:// is not there yet.
+            if urllib.parse.urlparse(self.url).scheme not in ("http", "https"):
+                etag = None
+            else:
+                etag = web_util.parse_etag(
+                    response.headers.get("Etag", None) or response.headers.get("etag", None)
+                )
+        except Exception as e:
             raise FetchIndexError(
                 f"Could not read index manifest from {url_index_manifest}"
             ) from e
-
-        with response:
-            index_blob_record = self.get_index_manifest(response)
-
-        # Early exit if our cache is up to date.
-        if self.local_hash and self.local_hash == index_blob_record.checksum:
-            return FetchIndexResult(etag=None, hash=None, data=None, fresh=True)
-
-        # Otherwise, download the index blob
-        cache_entry = cache_class(self.url, allow_unsigned=True)
-        computed_hash, result = self.fetch_index_blob(cache_entry, index_blob_record)
-        cache_entry.destroy()
-
-        # For now we only handle etags on http(s), since 304 error handling
-        # in s3:// is not there yet.
-        if urllib.parse.urlparse(self.url).scheme not in ("http", "https"):
-            etag = None
-        else:
-            etag = web_util.parse_etag(
-                response.headers.get("Etag", None) or response.headers.get("etag", None)
-            )
 
         return FetchIndexResult(etag=etag, hash=computed_hash, data=result, fresh=False)
 

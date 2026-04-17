@@ -1196,7 +1196,12 @@ def test_buildcache_create_view_append(
     "source_args", (args_for_active_env, args_for_env_by_path, args_for_env_by_name)
 )
 def test_buildcache_create_view_overwrite(
-    tmp_path, mutable_config, mutable_database, mutable_mock_env_path, source_args
+    tmp_path,
+    mutable_config,
+    mutable_database,
+    mutable_mock_env_path,
+    mock_binary_index,
+    source_args,
 ):
     mirror_directory = str(tmp_path)
     mirror("add", "--unsigned", "my-mirror", mirror_directory)
@@ -1262,7 +1267,7 @@ def test_buildcache_create_view_non_active_env(
     )  # Get the context for an active env using mpileaks[1]
     with context:
         command_args = ["update-index", "--name", "test_view", "my-mirror"] + extra_args
-        buildcache(*command_args)
+    buildcache(*command_args)
 
     hashes_in_view = read_specs_in_index(mirror_directory, "test_view")
     # Assert all of the hashes for mpileaks_0_hashes exist in the view, and no other hashes
@@ -1272,7 +1277,7 @@ def test_buildcache_create_view_non_active_env(
 @pytest.mark.parametrize("view", (None, "test_view"))
 @pytest.mark.disable_clean_stage_check
 def test_buildcache_check_index_full(
-    tmp_path, mutable_config, mutable_database, mutable_mock_env_path, view
+    tmp_path, mutable_config, mutable_database, mock_binary_index, mutable_mock_env_path, view
 ):
     view_args = ["--name", view] if view is not None else []
     mirror_directory = str(tmp_path)
@@ -1288,11 +1293,20 @@ def test_buildcache_check_index_full(
     with context:
         buildcache("update-index", "my-mirror", *extra_args)
 
-    out = buildcache("check-index", "--verify", "exists", "manifests", "blobs", "--", "my-mirror")
+    out = buildcache(
+        "check-index",
+        "--verify",
+        "exists",
+        "--verify",
+        "manifests",
+        "--verify",
+        "blobs",
+        "my-mirror",
+    )
     # Everything thing be good here
-    assert "Index exists in mirror: my-mirror"
-    assert "Missing specs: 0"
-    assert "Missing blobs: 0"
+    assert "Index exists in mirror: my-mirror" in out
+    assert "Missing specs: 0" in out
+    assert "Missing blobs: 0" in out
     if view:
         assert "Unindexed specs: n/a" in out
     else:
@@ -1307,24 +1321,33 @@ def test_buildcache_check_index_full(
     blob_path = tmp_path / "blobs" / "sha256"
     with open(tmp_path / "v3" / "manifests" / "index" / index_name, "r", encoding="utf-8") as fd:
         manifest = json.load(fd)
-        print(manifest)
         digest = manifest["data"][0]["checksum"]
         blob_path = blob_path / digest[:2] / digest
 
     # Delete the index manifest
     os.remove(blob_path)
 
-    out = buildcache("check-index", "--verify", "exists", "manifests", "blobs", "--", "my-mirror")
+    out = buildcache(
+        "check-index",
+        "--verify",
+        "exists",
+        "--verify",
+        "manifests",
+        "--verify",
+        "blobs",
+        "my-mirror",
+    )
+    print(out)
     # Everything thing be good here
-    assert "Index does not exist in mirror: my-mirror"
-    assert "Missing specs: 0"
+    assert "Index does not exist in mirror: my-mirror" in out
+    assert "Missing specs: 0" in out
     if view:
         assert "Unindexed specs: n/a" in out
-        assert "Missing blobs: 0"
+        assert "Missing blobs: 0" in out
     else:
         assert "The index blob is missing" in out
         assert "Unindexed specs: 15" in out
-        assert "Missing blobs: 1"
+        assert "Missing blobs: 1" in out
 
 
 def test_buildcache_push_with_group(

@@ -580,7 +580,6 @@ class URLBuildcacheEntry:
             mirror_url, *cls.get_relative_path_components(component_type), manifest_file_name
         )
 
-        print(f"writing: {manifest_destination_url}")
         web_util.push_to_url(
             manifest_path, manifest_destination_url, keep_original=False, extra_args=kwargs
         )
@@ -1086,9 +1085,6 @@ def check_mirror_for_layout(mirror: spack.mirrors.mirror.Mirror):
             "    in this mirror."
         )
         tty.warn(msg)
-
-
-_aws_sync_flag: bool
 
 
 def _entries_from_cache_aws_cli(url: str, component_type: BuildcacheComponent):
