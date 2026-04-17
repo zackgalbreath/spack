@@ -468,7 +468,7 @@ class BinaryIndexCache:
         if spec_cache_regenerate_needed:
             self.regenerate_spec_cache(clear_existing=spec_cache_clear_needed)
 
-    def get_index_fetcher(self, mirror_metadata: MirrorMetadata, cache_entry={}) -> IndexHandler:
+    def get_index_handler(self, mirror_metadata: MirrorMetadata, cache_entry={}) -> IndexHandler:
         """Get the index fetcher for a mirror metadata"""
         mirror_url = mirror_metadata.url
         scheme = urllib.parse.urlparse(mirror_url).scheme
@@ -525,7 +525,7 @@ class BinaryIndexCache:
             if not web_util.url_exists(index_url):
                 raise BuildcacheIndexNotExists(f"Index not found in cache {index_url}")
 
-        fetcher: IndexHandler = self.get_index_fetcher(mirror_metadata, cache_entry)
+        fetcher: IndexHandler = self.get_index_handler(mirror_metadata, cache_entry)
         result = fetcher.conditional_fetch()
 
         # Nothing to do
@@ -833,7 +833,7 @@ def _url_update_index(
                 _read_specs(file_list, read_fn, filter_fn, db)
 
             with timer.measure("push"):
-                index_fetcher = BINARY_INDEX.get_index_fetcher(mirror_metadata)
+                index_fetcher = BINARY_INDEX.get_index_handler(mirror_metadata)
                 index_fetcher.push_index(db)
 
             break
