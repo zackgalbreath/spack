@@ -46,7 +46,7 @@ import spack.caches
 import spack.config
 import spack.database
 import spack.deptypes as dt
-import spack.environment as ev
+import spack.environment.environment as ev
 import spack.error
 import spack.hash_types as ht
 import spack.hooks
