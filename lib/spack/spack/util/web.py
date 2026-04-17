@@ -123,7 +123,7 @@ class Retry:
 
     def sleep(self):
         """Sleep for the current attempts backoff waiting period"""
-        backoff: float = self.backoff_factor * (2 ** self.count)
+        backoff: float = self.backoff_factor * (2**self.count)
         if self.backoff_jitter != 0.0:
             backoff += random.random() * self.backoff_jitter
         backoff = float(max(0, min(self.backoff_max, backoff)))

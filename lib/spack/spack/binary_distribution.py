@@ -26,7 +26,21 @@ import urllib.request
 import warnings
 from collections import defaultdict
 from contextlib import closing
-from typing import Any, IO, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union, cast
+from typing import (
+    IO,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 import spack.caches
 import spack.config
@@ -540,10 +554,10 @@ class BinaryIndexCache:
         return True
 
     @contextlib.contextmanager
-    def read_index(self, mirror_metadata: MirrorMetadata) -> Optional[IO[str]]:
-        cache_entry = self._local_index_cache.get(str(mirror_metadata))
+    def read_index(self, mirror_metadata: MirrorMetadata) -> Iterator[Optional[IO[str]]]:
+        cache_entry = self._local_index_cache.get(str(mirror_metadata), {})
         if not cache_entry:
-            return None
+            yield None
         cache_key = cache_entry["index_path"]
         with self._index_file_cache.read_transaction(cache_key) as f:
             yield f
