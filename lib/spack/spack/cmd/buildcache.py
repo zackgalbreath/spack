@@ -1007,7 +1007,7 @@ def check_index_fn(args):
     index_exists = True
     missing_index_blob = False
     try:
-        BINARY_INDEX._fetch_and_cache_index(mirror_metadata)
+        BINARY_INDEX._fetch_and_cache_index(mirror_metadata, force=True)
     except spack.binary_distribution.BuildcacheIndexNotExists:
         index_exists = False
     except spack.binary_distribution.FetchIndexError:
@@ -1100,7 +1100,10 @@ def check_index_fn(args):
         summary_msg += f"\tMissing specs: {len(missing_specs)}\n"
 
     if "blobs" in verify:
-        summary_msg += f"\tMissing blobs: {len(missing_blobs)}\n"
+        nmissing = len(missing_blobs)
+        if missing_index_blob:
+            nmissing += 1
+        summary_msg += f"\tMissing blobs: {nmissing}\n"
 
     if args.output:
         os.makedirs(os.path.dirname(args.output), exist_ok=True)

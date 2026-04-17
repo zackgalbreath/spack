@@ -493,7 +493,9 @@ class BinaryIndexCache:
                     mirror_metadata, local_hash=cache_entry.get("index_hash", None)
                 )
 
-    def _fetch_and_cache_index(self, mirror_metadata: MirrorMetadata, cache_entry={}):
+    def _fetch_and_cache_index(
+        self, mirror_metadata: MirrorMetadata, cache_entry={}, force: bool = False
+    ):
         """Fetch a buildcache index file from a remote mirror and cache it.
 
         If we already have a cached index from this mirror, then we first
@@ -525,7 +527,7 @@ class BinaryIndexCache:
                 raise BuildcacheIndexNotExists(f"Index not found in cache {index_url}")
 
         fetcher: "IndexHandler" = self.get_index_handler(mirror_metadata, cache_entry)
-        result = fetcher.conditional_fetch()
+        result = fetcher.conditional_fetch(force=True)
 
         # Nothing to do
         if result.fresh:
@@ -715,9 +717,6 @@ def _url_push_index(mirror_metadata: MirrorMetadata, db: BuildCacheDatabase, **k
         url_util.join(mirror_metadata.view, "index") if mirror_metadata.view else "index",
     )
     db_path = (db._index_path.as_posix(),)
-    print(f"pushing index: {mirror_metadata.url}/{index_path}")
-    print(f"db path: {db_path}")
-    print(f"extra args: {kwargs}")
 
     # Attempt to upload the index
     cache_class = get_url_buildcache_class(layout_version=mirror_metadata.version)
@@ -2665,7 +2664,7 @@ class IndexHandler:
     def __init__(self, mirror_metadata: MirrorMetadata):
         self.mirror_metadata = mirror_metadata
 
-    def conditional_fetch(self) -> FetchIndexResult:
+    def conditional_fetch(self, force: bool = False) -> FetchIndexResult:
         raise NotImplementedError(f"{self.__class__.__name__} is abstract")
 
     def get_index_manifest(self, manifest_response) -> BlobRecord:
@@ -2743,12 +2742,12 @@ class DefaultIndexHandlerV2(IndexHandler):
             return None
         return remote_hash.decode("utf-8")
 
-    def conditional_fetch(self) -> FetchIndexResult:
+    def conditional_fetch(self, force: bool = False) -> FetchIndexResult:
         # Do an intermediate fetch for the hash
         # and a conditional fetch for the contents
 
         # Early exit if our cache is up to date.
-        if self.local_hash and self.local_hash == self.get_remote_hash():
+        if not force and self.local_hash and self.local_hash == self.get_remote_hash():
             return FetchIndexResult(etag=None, hash=None, data=None, fresh=True)
 
         # Otherwise, download index.json
@@ -2799,10 +2798,12 @@ class EtagIndexHandlerV2(IndexHandler):
         self.etag = etag
         self.urlopen = urlopen
 
-    def conditional_fetch(self) -> FetchIndexResult:
+    def conditional_fetch(self, force: bool = False) -> FetchIndexResult:
         # Just do a conditional fetch immediately
         url = url_util.join(self.url, "build_cache", spack.database.INDEX_JSON_FILE)
-        headers = {"User-Agent": web_util.SPACK_USER_AGENT, "If-None-Match": f'"{self.etag}"'}
+        headers = {"User-Agent": web_util.SPACK_USER_AGENT}
+        if not force:
+            headers.update({"If-None-Match": f'"{self.etag}"'})
 
         try:
             response = self.urlopen(urllib.request.Request(url, headers=headers))
@@ -2841,7 +2842,7 @@ class OCIIndexHandler(IndexHandler):
         self.ref = spack.oci.image.ImageReference.from_url(mirror_metadata.url)
         self.urlopen = urlopen or spack.oci.opener.urlopen
 
-    def conditional_fetch(self) -> FetchIndexResult:
+    def conditional_fetch(self, force: bool = False) -> FetchIndexResult:
         """Download an index from an OCI registry type mirror."""
         url_manifest = self.ref.with_tag(default_index_tag).manifest_url()
         try:
@@ -2867,7 +2868,7 @@ class OCIIndexHandler(IndexHandler):
             raise FetchIndexError(f"Remote index {url_manifest} is invalid", e) from e
 
         # Fresh?
-        if index_digest.digest == self.local_hash:
+        if not force and index_digest.digest == self.local_hash:
             return FetchIndexResult(etag=None, hash=None, data=None, fresh=True)
 
         # Otherwise fetch the blob / index.json
@@ -2901,7 +2902,7 @@ class DefaultIndexHandler(IndexHandler):
         self.urlopen = urlopen
         self.headers = {"User-Agent": web_util.SPACK_USER_AGENT}
 
-    def conditional_fetch(self) -> FetchIndexResult:
+    def conditional_fetch(self, force: bool = False) -> FetchIndexResult:
         cache_class = get_url_buildcache_class(layout_version=self.layout_version)
         url_index_manifest = cache_class.get_index_url(self.url, self.view)
 
@@ -2914,7 +2915,7 @@ class DefaultIndexHandler(IndexHandler):
                 index_blob_record = self.get_index_manifest(response)
 
             # Early exit if our cache is up to date.
-            if self.local_hash and self.local_hash == index_blob_record.checksum:
+            if not force and self.local_hash and self.local_hash == index_blob_record.checksum:
                 return FetchIndexResult(etag=None, hash=None, data=None, fresh=True)
 
             # Otherwise, download the index blob
@@ -2968,16 +2969,19 @@ class EtagIndexHandler(IndexHandler):
             args = {"IfMatch": self.etag}
         return args
 
-    def conditional_fetch(self) -> FetchIndexResult:
+    def conditional_fetch(self, force: bool = False) -> FetchIndexResult:
         # Do a conditional fetch of the index manifest (i.e. using If-None-Match header)
         cache_class = get_url_buildcache_class(layout_version=self.layout_version)
         manifest_url = cache_class.get_index_url(self.url, self.view)
-        headers = {"User-Agent": web_util.SPACK_USER_AGENT, "If-None-Match": f'"{self.etag}"'}
+        headers = {"User-Agent": web_util.SPACK_USER_AGENT}
+        if not force:
+            headers.update({"If-None-Match": f'"{self.etag}"'})
 
         try:
             response = self.urlopen(urllib.request.Request(manifest_url, headers=headers))
         except urllib.error.HTTPError as e:
             if e.getcode() == 304:
+                assert not force, "Force fetching failed"
                 # The remote manifest has not been modified, i.e. the index we
                 # already have is the freshest there is.
                 return FetchIndexResult(etag=None, hash=None, data=None, fresh=True)

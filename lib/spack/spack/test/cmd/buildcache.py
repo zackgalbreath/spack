@@ -1337,7 +1337,6 @@ def test_buildcache_check_index_full(
         "blobs",
         "my-mirror",
     )
-    print(out)
     # Everything thing be good here
     assert "Index does not exist in mirror: my-mirror" in out
     assert "Missing specs: 0" in out
