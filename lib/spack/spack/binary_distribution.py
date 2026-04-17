@@ -46,7 +46,6 @@ import spack.caches
 import spack.config
 import spack.database
 import spack.deptypes as dt
-import spack.environment.environment as ev
 import spack.error
 import spack.hash_types as ht
 import spack.hooks
@@ -726,7 +725,7 @@ def _url_push_index(mirror_metadata: MirrorMetadata, db: BuildCacheDatabase, **k
 
 def _read_specs(
     file_list: List[str],
-    read_method: Callable[[str], URLBuildcacheEntry],
+    read_method: Callable[[str], spack.spec.Spec],
     filter_fn: Callable[[str], bool],
     db: BuildCacheDatabase,
 ):
@@ -749,29 +748,13 @@ def _read_specs(
         if not filter_fn(spec_hash):
             continue
 
-        cache_entry: Optional[URLBuildcacheEntry] = None
-        try:
-            spec = None
-            # Try to get the spec from the current active environment
-            env = ev.active_environment()
-            if env:
-                spec = env.specs_by_hash.get(spec_hash)
-
-            # Try to get the spec from the local index cache
-            if not spec:
-                spec = BINARY_INDEX._known_specs.get(spec_hash)
-
-            # Finally try fetching the spec from the remote
-            if not spec:
-                cache_entry = read_method(file)
-                spec_dict = cache_entry.fetch_metadata()
-                spec = spack.spec.Spec.from_dict(spec_dict)
-        except Exception as e:
-            tty.warn(f"Unable to fetch spec for manifest {file} due to: {e}")
+        # If it is already in the database, make sure to mark it and continue
+        record = db.query_local_by_spec_hash(spec_hash)
+        if record:
+            db.mark(record.spec, "in_buildcache", True)
             continue
-        finally:
-            if cache_entry:
-                cache_entry.destroy()
+
+        spec = read_method(file)
 
         if not spec:
             raise GenerateIndexError(f"Could not find spec for hash {spec_hash}")
@@ -785,6 +768,7 @@ def _url_update_index(
     tmpdir: str,
     append: bool = False,
     filter_fn: Callable[[str], bool] = lambda x: True,
+    spec_by_hash: Callable[[str], Optional[spack.spec.Spec]] = lambda x: None,
     *,
     timer=timer.NULL_TIMER,
     retry: web_util.Retry = web_util.Retry(),
@@ -814,6 +798,33 @@ def _url_update_index(
 
         tty.debug(f"Retrieving spec descriptor files from {mirror_metadata} to build index")
 
+        def _lazy_read_spec(file: str):
+            """Lazy reader that attempts to find the spec using local dicts first"""
+            spec_hash = file.split("/")[-1].split("-")[-1].split(".")[0]
+
+            # Try to look it up from a passed source
+            s = spec_by_hash(spec_hash)
+            if s:
+                return s
+
+            # Look in the cached databases
+            s = BINARY_INDEX._known_specs.get(spec_hash)
+            if s:
+                return s
+
+            cache_entry: Optional[URLBuildcacheEntry] = None
+            try:
+                cache_entry = read_fn(file)
+                spec_dict = cache_entry.fetch_metadata()
+                s = spack.spec.Spec.from_dict(spec_dict)
+            except Exception as e:
+                tty.warn(f"Unable to fetch spec for manifest {file} due to: {e}")
+            finally:
+                if cache_entry:
+                    cache_entry.destroy()
+
+            return s
+
         # Initialize a database for generating the index
         db = BuildCacheDatabase(tmpdir)
         db._write()
@@ -830,7 +841,7 @@ def _url_update_index(
 
             # Read the specs from the cache into the database db
             with timer.measure("read"):
-                _read_specs(file_list, read_fn, filter_fn, db)
+                _read_specs(file_list, _lazy_read_spec, filter_fn, db)
 
             with timer.measure("push"):
                 index_fetcher = BINARY_INDEX.get_index_handler(mirror_metadata)

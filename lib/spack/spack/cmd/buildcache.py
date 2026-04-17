@@ -305,9 +305,8 @@ def setup_parser(subparser: argparse.ArgumentParser):
     check_index = subparsers.add_parser("check-index", help=check_index_fn.__doc__)
     check_index.add_argument(
         "--verify",
-        nargs="+",
+        action="append",
         choices=["exists", "manifests", "blobs", "all"],
-        default=["exists"],
         help="List of items to verify along along with the index.",
     )
     check_index.add_argument(
@@ -944,24 +943,39 @@ def update_view(
             "Index already exists. To overwrite or update pass --force or --append respectively"
         )
 
+    envs = []
     hashes = []
     if sources:
         for source in sources:
             tty.debug(f"reading specs from source: {source}")
             env = ev.environment_from_name_or_dir(source)
+            envs.append(env)
             hashes.extend(env.all_hashes())
     else:
         # Get hashes in the current active environment
         hashes = spack.cmd.require_active_env(cmd_name="buildcache update-view").all_hashes()
+        envs.append(ev.active_environment())
 
     if not hashes:
         tty.warn("No specs found for view, creating an empty index")
 
     filter_fn = lambda x: x in hashes
 
+    def _spec_by_hash(spec_hash: str) -> Optional[Spec]:
+        for e in envs:
+            try:
+                return e.get_one_by_hash(spec_hash)
+            except Exception:
+                continue
+        return None
+
     with tempfile.TemporaryDirectory(dir=spack.stage.get_stage_root()) as tmpdir:
         spack.binary_distribution._url_update_index(
-            mirror_metadata, tmpdir, update_mode == ViewUpdateMode.APPEND, filter_fn
+            mirror_metadata,
+            tmpdir,
+            update_mode == ViewUpdateMode.APPEND,
+            filter_fn=filter_fn,
+            spec_by_hash=_spec_by_hash,
         )
 
     if update_keys:
@@ -971,7 +985,7 @@ def update_view(
 def check_index_fn(args):
     """Check if a build cache index, manifests, and blobs are consistent"""
     mirror = args.mirror
-    verify = set(args.verify)
+    verify = set(args.verify or ["exists"])
 
     checking_view_index = (args.name or mirror.fetch_view) is not None
 
@@ -1059,11 +1073,16 @@ def check_index_fn(args):
 
     # Print summary
     summary_msg = "Build cache check:\n\t"
+    if args.name:
+        mirror_name = f"{mirror.name}/{args.name}"
+    else:
+        mirror_name = f"{mirror.name}"
+
     if "exists" in verify:
         if index_exists:
-            summary_msg = f"Index exists in mirror: {mirror.name}"
+            summary_msg = f"Index exists in mirror: {mirror_name}"
         else:
-            summary_msg = f"Index does not exist in mirror: {mirror.name}"
+            summary_msg = f"Index does not exist in mirror: {mirror_name}"
         if mirror.fetch_view:
             summary_msg += f"@{mirror.fetch_view}"
         summary_msg += "\n"
@@ -1103,7 +1122,7 @@ def update_index_fn(args):
 
     t = timer_mod.Timer() if tty.is_verbose() else timer_mod.NullTimer()
 
-    update_view_index = (
+    update_view_index = bool(
         args.append or args.force or args.name or args.sources or args.mirror.push_view
     )
 
@@ -1113,7 +1132,6 @@ def update_index_fn(args):
             update_mode = ViewUpdateMode.OVERWRITE
         elif args.append:
             update_mode = ViewUpdateMode.APPEND
-
         return update_view(
             args.mirror,
             update_mode,
