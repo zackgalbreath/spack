@@ -779,7 +779,7 @@ def _url_update_index(
     spec_by_hash: Callable[[str], Optional[spack.spec.Spec]] = lambda x: None,
     *,
     timer=timer.NULL_TIMER,
-    retry: web_util.Retry = web_util.Retry(),
+    retry: Optional[web_util.Retry] = None,
 ):
     """Create or replace the build cache index on the given mirror.  The
     buildcache index contains an entry for each binary package under the
@@ -792,6 +792,8 @@ def _url_update_index(
     Return:
         None
     """
+    if retry is None:
+        retry = web_util.Retry()
     # Iterate until success
     for attempt in retry:
         with timer.measure("list"):
@@ -2921,7 +2923,6 @@ class DefaultIndexHandler(IndexHandler):
             # Otherwise, download the index blob
             cache_entry = cache_class(self.url, allow_unsigned=True)
             computed_hash, result = self.fetch_index_blob(cache_entry, index_blob_record)
-            print(result)
             cache_entry.destroy()
 
             # For now we only handle etags on http(s), since 304 error handling
