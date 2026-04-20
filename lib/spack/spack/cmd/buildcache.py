@@ -1101,7 +1101,7 @@ def check_index_fn(args):
 
     if "blobs" in verify:
         nmissing = len(missing_blobs)
-        if missing_index_blob:
+        if missing_index_blob and not checking_view_index:
             nmissing += 1
         summary_msg += f"\tMissing blobs: {nmissing}\n"
 
