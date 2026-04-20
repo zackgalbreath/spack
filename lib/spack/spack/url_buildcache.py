@@ -1087,7 +1087,7 @@ def check_mirror_for_layout(mirror: spack.mirrors.mirror.Mirror):
         tty.warn(msg)
 
 
-def _entries_from_cache_aws_cli(url: str, component_type: BuildcacheComponent):
+def _entries_from_cache_aws_cli(url: str, tmpspecsdir: str, component_type: BuildcacheComponent):
     """Use aws cli to sync all manifests into a local temporary directory.
 
     Args:
